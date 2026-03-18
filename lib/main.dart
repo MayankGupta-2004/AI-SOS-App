@@ -1,21 +1,24 @@
 import 'package:flutter/material.dart';
 import 'services/ai_service.dart';
 import 'services/contact_service.dart';
+import 'services/notification_service.dart';
 import 'services/permission_service.dart';
 import 'screens/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ── STEP 1: Request all permissions FIRST ──────────────────────
-  // Must happen before any service tries to use mic, location, SMS
+  // Step 1: Request all permissions
   await PermissionService.requestAllPermissions();
 
-  // ── STEP 2: Load AI models ──────────────────────────────────────
+  // Step 2: Initialize notifications
+  await NotificationService().init();
+
+  // Step 3: Load AI models
   final aiService = AIService();
   await aiService.initModels();
 
-  // ── STEP 3: Load saved contacts ────────────────────────────────
+  // Step 4: Load saved contacts
   final contactService = ContactService();
   await contactService.loadContacts();
 

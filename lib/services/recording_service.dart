@@ -1,149 +1,84 @@
-import 'dart:async';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
-import 'package:record/record.dart';
+import 'package:flutter/services.dart';
 
-/// RecordingService — Records audio for minimum 10 minutes after SOS.
+/// RecordingService — Flutter side.
 ///
-/// SAVE LOCATION: /sdcard/Android/data/com.example.mobile_app/files/
-/// (External storage — you can browse this with a file manager app)
+/// The 10-minute auto-stop timer lives in the NATIVE Android service
+/// (RecordingService.kt → handler.postDelayed).
 ///
-/// Cannot be stopped before 10 minutes — protects evidence recording.
+/// This means recording stops correctly even when:
+///   - App is swiped from recents
+///   - Phone screen is locked
+///   - Flutter engine is killed
+///
+/// This Dart class just starts/stops via MethodChannel.
 
 class RecordingService {
-  final AudioRecorder _recorder = AudioRecorder();
+  static const _channel = MethodChannel('com.example.mobile_app/recorder');
 
   bool _isRecording = false;
   String? _currentFilePath;
-  Timer? _minDurationTimer;
-  bool _minDurationReached = false;
 
-  static const Duration _minDuration = Duration(minutes: 10);
-
-  /// Start 10-minute background recording
+  /// Start recording — 10-min timer is managed natively in Android
   Future<void> startRecording({Function(String path)? onSaved}) async {
     if (_isRecording) {
-      print("[Recording] ⚠️ Already recording");
-      return;
-    }
-
-    // Check mic permission
-    final hasPermission = await _recorder.hasPermission();
-    if (!hasPermission) {
-      print("[Recording] ❌ No microphone permission");
+      print("[Recording] Already recording — skipping");
       return;
     }
 
     try {
-      // Use external storage so file is findable via file manager
-      // Falls back to internal if external not available
-      String dirPath;
-      try {
-        final externalDir = await getExternalStorageDirectory();
-        dirPath = externalDir!.path;
-      } catch (_) {
-        final internalDir = await getApplicationDocumentsDirectory();
-        dirPath = internalDir.path;
+      print("[Recording] Starting via native RecordingService...");
+
+      final path = await _channel.invokeMethod<String>('startRecording');
+
+      if (path == null) {
+        print("[Recording] No path returned — start failed");
+        return;
       }
 
-      // Create recordings folder
-      final recordingsDir = Directory('$dirPath/KavachRecordings');
-      if (!await recordingsDir.exists()) {
-        await recordingsDir.create(recursive: true);
-      }
-
-      // Filename with timestamp
-      final now = DateTime.now();
-      final filename = 'SOS_${now.year}-${now.month.toString().padLeft(2, '0')}'
-          '-${now.day.toString().padLeft(2, '0')}'
-          '_${now.hour.toString().padLeft(2, '0')}'
-          '-${now.minute.toString().padLeft(2, '0')}'
-          '-${now.second.toString().padLeft(2, '0')}.m4a';
-
-      _currentFilePath = '${recordingsDir.path}/$filename';
-
-      print("[Recording] 📁 Save path: $_currentFilePath");
-
-      // Start recording
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          sampleRate: 16000,
-          numChannels: 1,
-          bitRate: 64000,
-        ),
-        path: _currentFilePath!,
-      );
-
+      _currentFilePath = path;
       _isRecording = true;
-      _minDurationReached = false;
 
-      print("[Recording] 🎙️ Recording STARTED");
-      print(
-          "[Recording] ⏱️ Minimum duration: ${_minDuration.inMinutes} minutes");
-      print(
-          "[Recording] ⚠️ Recording CANNOT be stopped before ${_minDuration.inMinutes} min");
+      print("[Recording] STARTED: $path");
+      print("[Recording] Auto-stop in 10 min (managed by Android service)");
 
-      // Set minimum duration guard
-      _minDurationTimer = Timer(_minDuration, () {
-        _minDurationReached = true;
-        print("[Recording] ✅ Minimum duration reached — can now stop");
-      });
-
-      // Auto-stop at exactly 10 minutes + 5 seconds
-      Timer(_minDuration + const Duration(seconds: 5), () async {
-        if (_isRecording) {
-          print("[Recording] ⏰ Auto-stopping at 10 min mark");
-          await _stopAndSave(onSaved: onSaved);
-        }
-      });
+      // Notify caller with path when done
+      // Note: since the timer is native, onSaved won't fire when app is killed.
+      // The file is still saved correctly on disk regardless.
+      onSaved?.call(path);
+    } on PlatformException catch (e) {
+      print("[Recording] Platform error: ${e.code} — ${e.message}");
     } catch (e) {
-      _isRecording = false;
-      print("[Recording] ❌ Start failed: $e");
+      print("[Recording] Error: $e");
     }
   }
 
-  /// Request stop — silently ignored if min duration not reached
+  /// Request stop — always honoured (no min-duration block on Flutter side)
   Future<void> requestStop({Function(String path)? onSaved}) async {
     if (!_isRecording) return;
-
-    if (!_minDurationReached) {
-      print("[Recording] 🔒 Stop BLOCKED — min duration not reached yet");
-      return;
-    }
-
-    await _stopAndSave(onSaved: onSaved);
+    await _stop(onSaved: onSaved);
   }
 
-  /// Force stop — only for app teardown
+  /// Force stop
   Future<void> forceStop({Function(String path)? onSaved}) async {
-    _minDurationTimer?.cancel();
-    _minDurationReached = true;
-    await _stopAndSave(onSaved: onSaved);
+    if (!_isRecording) return;
+    await _stop(onSaved: onSaved);
   }
 
-  Future<void> _stopAndSave({Function(String path)? onSaved}) async {
-    if (!_isRecording) return;
-
+  Future<void> _stop({Function(String path)? onSaved}) async {
     try {
-      _minDurationTimer?.cancel();
-      final path = await _recorder.stop();
+      final savedPath = await _channel.invokeMethod<String>('stopRecording');
       _isRecording = false;
-
+      final path = savedPath ?? _currentFilePath;
       if (path != null) {
-        final file = File(path);
-        if (await file.exists()) {
-          final bytes = await file.length();
-          final mb = (bytes / 1024 / 1024).toStringAsFixed(2);
-          print("[Recording] 💾 SAVED: $path");
-          print("[Recording] 📦 File size: $mb MB");
-          onSaved?.call(path);
-        } else {
-          print("[Recording] ⚠️ File not found after recording: $path");
-        }
+        print("[Recording] SAVED: $path");
+        onSaved?.call(path);
       }
+    } on PlatformException catch (e) {
+      _isRecording = false;
+      print("[Recording] Stop error: ${e.message}");
     } catch (e) {
-      print("[Recording] ❌ Stop error: $e");
+      _isRecording = false;
+      print("[Recording] Stop error: $e");
     }
   }
 
@@ -151,7 +86,8 @@ class RecordingService {
   String? get currentFilePath => _currentFilePath;
 
   void dispose() {
-    _minDurationTimer?.cancel();
-    _recorder.dispose();
+    if (_isRecording) {
+      _channel.invokeMethod('stopRecording').catchError((_) {});
+    }
   }
 }

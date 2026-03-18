@@ -1,21 +1,23 @@
-import 'dart:async';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter/services.dart';
 
+import 'notification_service.dart';
 import 'sos_service.dart';
 import 'siren_service.dart';
 import 'recording_service.dart';
 import 'contact_service.dart';
 
-/// KavachListener — Full protection mode controller.
+/// KavachListener
 ///
-/// FLOW:
-/// [Protection ON] → Layer 1: speech_to_text keyword loop
-///                       ↓ keyword/button
-///                   Layer 2: stop speech → siren → SMS+server → recording
+/// Recording is 100% native — KavachService.kt handles it.
+/// Flutter only handles: siren, SMS, notifications, UI.
+/// Flutter NEVER starts or stops recording directly.
 
 class KavachListener {
-  final SpeechToText _speech = SpeechToText();
+  static const _speechChannel = MethodChannel('com.example.mobile_app/speech');
+  static const _recordChannel =
+      MethodChannel('com.example.mobile_app/recorder');
+
+  final NotificationService _notif = NotificationService();
 
   final SOSService sosService;
   final SirenService sirenService;
@@ -24,29 +26,9 @@ class KavachListener {
 
   bool _protectionMode = false;
   bool _sosTriggered = false;
-  bool _speechInitialized = false;
-  bool _isListening = false;
 
   Function(String status)? onStatusUpdate;
   Function(bool sosActive)? onSosStateChange;
-
-  static const List<String> _keywords = [
-    'help',
-    'help me',
-    'save me',
-    'bachao',
-    'koi bachao',
-    'bacchao',
-    'mujhe bachao',
-    'madad',
-    'madad karo',
-    'somebody help',
-    'please help',
-    'emergency',
-    'danger',
-    'help help',
-    'sos',
-  ];
 
   KavachListener({
     required this.sosService,
@@ -55,214 +37,131 @@ class KavachListener {
     required this.contactService,
     this.onStatusUpdate,
     this.onSosStateChange,
-  });
+  }) {
+    _speechChannel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'onKeywordDetected':
+          final keyword = call.arguments as String? ?? '';
+          print("[Kavach] Native keyword: '$keyword'");
+          if (_protectionMode && !_sosTriggered) {
+            await _handleSOSTrigger();
+          }
+          break;
+        case 'onStatusUpdate':
+          final status = call.arguments as String? ?? '';
+          if (status == 'listening' && _protectionMode && !_sosTriggered) {
+            onStatusUpdate?.call('👂 Listening for distress keywords...');
+          }
+          break;
+      }
+    });
+  }
 
-  // ═══════════════════════════════════════════════════════
-  // START PROTECTION MODE
-  // ═══════════════════════════════════════════════════════
+  // ── START PROTECTION ──────────────────────────────────────────
 
   Future<bool> startProtection() async {
     if (_protectionMode) return true;
-
-    // ── Check mic permission explicitly ──────────────────
-    final micStatus = await Permission.microphone.status;
-    if (!micStatus.isGranted) {
-      final result = await Permission.microphone.request();
-      if (!result.isGranted) {
-        print("[Kavach] ❌ Microphone permission denied");
-        onStatusUpdate?.call('❌ Microphone permission denied. Go to Settings.');
-        return false;
-      }
-    }
-
     print("[Kavach] 🛡️ Starting protection mode");
-    onStatusUpdate?.call('Starting speech recognition...');
-
-    // ── Initialize speech engine ─────────────────────────
-    if (!_speechInitialized) {
-      _speechInitialized = await _speech.initialize(
-        onStatus: (status) {
-          print("[Kavach] Speech status: $status");
-          _isListening = _speech.isListening;
-
-          // Auto-restart when session ends naturally
-          if (_protectionMode && !_sosTriggered) {
-            if (status == SpeechToText.doneStatus ||
-                status == SpeechToText.notListeningStatus) {
-              Future.delayed(const Duration(milliseconds: 300), _startLayer1);
-            }
-          }
-        },
-        onError: (error) {
-          print(
-              "[Kavach] Speech error: ${error.errorMsg} (permanent: ${error.permanent})");
-          _isListening = false;
-
-          if (_protectionMode && !_sosTriggered) {
-            // Permanent errors need re-init
-            if (error.permanent) {
-              _speechInitialized = false;
-            }
-            Future.delayed(const Duration(seconds: 1), _startLayer1);
-          }
-        },
-      );
-    }
-
-    if (!_speechInitialized) {
-      print("[Kavach] ❌ Speech init failed");
-      onStatusUpdate
-          ?.call('❌ Speech recognition failed. Check mic permission.');
+    onStatusUpdate?.call('Starting protection mode...');
+    try {
+      await _speechChannel.invokeMethod('startListening');
+      _protectionMode = true;
+      _sosTriggered = false;
+      await _notif.showProtectionOn();
+      onStatusUpdate?.call('👂 Listening for distress keywords...');
+      print("[Kavach] ✅ Protection mode active");
+      return true;
+    } on PlatformException catch (e) {
+      print("[Kavach] ❌ Failed: ${e.message}");
       return false;
     }
-
-    _protectionMode = true;
-    _sosTriggered = false;
-    _startLayer1();
-    return true;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // LAYER 1 — KEYWORD LISTENING LOOP
-  // Restarts itself automatically
-  // ═══════════════════════════════════════════════════════
+  // ── SOS TRIGGER ───────────────────────────────────────────────
 
-  Future<void> _startLayer1() async {
-    if (!_protectionMode || _sosTriggered || !_speechInitialized) return;
-    if (_speech.isListening) return; // already running
-
-    print("[Kavach] 👂 Layer 1: keyword listening active");
-    onStatusUpdate?.call('👂 Listening for distress keywords...');
-
-    try {
-      await _speech.listen(
-        listenMode: ListenMode.dictation,
-        partialResults: true,
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 5),
-        onResult: (result) {
-          final words = result.recognizedWords.toLowerCase().trim();
-          if (words.isEmpty) return;
-
-          print("[Kavach] Heard: '$words'");
-
-          for (final kw in _keywords) {
-            if (words.contains(kw)) {
-              print("[Kavach] 🚨 KEYWORD: '$kw'");
-              _triggerLayer2();
-              return;
-            }
-          }
-        },
-      );
-    } catch (e) {
-      print("[Kavach] Listen error: $e");
-      if (_protectionMode && !_sosTriggered) {
-        Future.delayed(const Duration(seconds: 2), _startLayer1);
-      }
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // LAYER 2 — FULL SOS SEQUENCE
-  // ═══════════════════════════════════════════════════════
-
-  Future<void> _triggerLayer2() async {
+  Future<void> _handleSOSTrigger() async {
     if (_sosTriggered) return;
     _sosTriggered = true;
     onSosStateChange?.call(true);
+    print("[Kavach] 🚨 SOS SEQUENCE START");
 
-    print("[Kavach] ══════════════════════════════════");
-    print("[Kavach] 🚨 LAYER 2 — SOS SEQUENCE START");
-    print("[Kavach] ══════════════════════════════════");
-
-    // STEP 1 — Stop speech recognition
-    print("[Kavach] STEP 1: Stopping speech recognition");
-    onStatusUpdate?.call('🚨 SOS — Stopping mic...');
+    // STEP 1 — Stop speech (native already stopped it, this is just Flutter-side cleanup)
+    onStatusUpdate?.call('🚨 SOS triggered!');
     try {
-      await _speech.stop();
-    } catch (e) {
-      print("[Kavach] Speech stop error (non-fatal): $e");
-    }
-    print("[Kavach] ✅ Speech stopped");
+      await _speechChannel.invokeMethod('stopListening');
+    } catch (_) {}
 
-    // STEP 2 — Start siren
-    print("[Kavach] STEP 2: Starting siren");
-    onStatusUpdate?.call('🔊 Siren ON...');
+    // STEP 2 — Siren
     await sirenService.startSiren();
-    print("[Kavach] ✅ Siren playing");
+    await _notif.showSOSTriggered();
 
-    // STEP 3+4 — Send SMS + ping server (parallel)
-    print("[Kavach] STEP 3+4: Sending SMS + server ping");
-    onStatusUpdate?.call(
-        '📤 Sending SOS to ${contactService.contacts.length} contacts...');
+    // STEP 3 — SMS + server
+    onStatusUpdate?.call('📤 Sending SOS...');
     await sosService.sendSOS(contactService);
-    print("[Kavach] ✅ SMS sent + server pinged");
 
-    // STEP 5 — Start 10-min background recording
-    print("[Kavach] STEP 5: Starting 10-min background recording");
-    onStatusUpdate?.call('🎙️ Recording started (10 min)...');
-    await recordingService.startRecording(
-      onSaved: (path) {
-        print("[Kavach] 💾 Recording saved: $path");
-        onStatusUpdate?.call('✅ Recording saved to phone');
-      },
-    );
-    print("[Kavach] ✅ Recording running");
+    // STEP 4 — Recording is ALREADY running natively.
+    // Just update the UI — do NOT start a new recording.
+    await Future.delayed(const Duration(milliseconds: 500));
+    final nativeRecording = await _isNativeRecording();
+    if (nativeRecording) {
+      print("[Kavach] ✅ Native recording confirmed running");
+      await _notif.showRecordingStarted();
+      onStatusUpdate?.call('🎙️ Recording in background (10 min)');
+    } else {
+      print(
+          "[Kavach] ⚠️ Native recording not detected — may have started late");
+      onStatusUpdate?.call('⚠️ Check recording status');
+    }
 
-    print("[Kavach] ══════════════════════════════════");
-    print("[Kavach] ✅ FULL SOS SEQUENCE COMPLETE");
-    print("[Kavach] ══════════════════════════════════");
+    print("[Kavach] ✅ SOS SEQUENCE COMPLETE");
     onStatusUpdate?.call('🚨 SOS Active | Recording in background');
   }
 
-  // ═══════════════════════════════════════════════════════
-  // MANUAL SOS — Kavach button
-  // ═══════════════════════════════════════════════════════
-
-  Future<void> manualSOS() async {
-    print("[Kavach] 🔴 Manual SOS triggered");
-    await _triggerLayer2();
+  Future<bool> _isNativeRecording() async {
+    try {
+      return await _recordChannel.invokeMethod<bool>('isRecording') ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // STOP SOS — siren off, recording continues
-  // ═══════════════════════════════════════════════════════
+  // ── MANUAL SOS BUTTON ─────────────────────────────────────────
+
+  Future<void> manualSOS() async {
+    print("[Kavach] 🔴 Manual SOS");
+    await _handleSOSTrigger();
+  }
+
+  // ── STOP SOS ──────────────────────────────────────────────────
 
   Future<void> stopSOS() async {
     if (!_sosTriggered) return;
-
     await sirenService.stopSiren();
+    await _notif.showSOSStopped();
     _sosTriggered = false;
     onSosStateChange?.call(false);
-
-    print("[Kavach] Siren OFF. Recording continues in background.");
-
-    if (_protectionMode) {
-      Future.delayed(const Duration(seconds: 2), _startLayer1);
-    }
-
-    onStatusUpdate?.call(
-      _protectionMode ? '👂 Listening for keywords...' : 'Protection mode OFF',
-    );
+    // Recording continues — NEVER stopped here
+    print("[Kavach] Siren OFF. Recording continues natively.");
+    onStatusUpdate?.call('🎙️ Recording continues in background...');
   }
 
-  // ═══════════════════════════════════════════════════════
-  // STOP PROTECTION MODE
-  // ═══════════════════════════════════════════════════════
+  // ── STOP PROTECTION ───────────────────────────────────────────
 
   Future<void> stopProtection() async {
     _protectionMode = false;
     _sosTriggered = false;
 
+    // Only stops speech — recording (if active) keeps running natively
     try {
-      await _speech.stop();
+      await _speechChannel.invokeMethod('stopListening');
     } catch (_) {}
     await sirenService.stopSiren();
+    await _notif.showProtectionOff();
+    Future.delayed(const Duration(seconds: 3), () => _notif.cancelAll());
 
     onSosStateChange?.call(false);
     onStatusUpdate?.call('Protection mode OFF');
-    print("[Kavach] 🛡️ Protection mode OFF");
+    print("[Kavach] 🛡️ Protection OFF. Any active recording continues.");
   }
 
   bool get isProtectionActive => _protectionMode;

@@ -10,7 +10,8 @@ import 'contact_service.dart';
 
 class SOSService {
   // ✅ Replace with your actual server URL
-  static const String _serverUrl = 'https://YOUR_SERVER_URL/api/sos';
+  static const String _serverUrl =
+      'https://kavach-server-zmj5.onrender.com/api/sos';
 
   final _messenger = FlutterBackgroundMessenger();
   bool _isSending = false;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -9,12 +10,18 @@ import 'package:permission_handler/permission_handler.dart';
 import 'contact_service.dart';
 
 class SOSService {
-  // ✅ Replace with your actual server URL
   static const String _serverUrl =
       'https://kavach-server-zmj5.onrender.com/api/sos';
+  static const String _locationUrl =
+      'https://kavach-server-zmj5.onrender.com/api/location';
 
   final _messenger = FlutterBackgroundMessenger();
+
   bool _isSending = false;
+  Timer? _locationTimer;
+  String? _activeSessionId; // links all location updates to one SOS event
+
+  // ── MAIN SOS TRIGGER ─────────────────────────────────────────
 
   Future<void> sendSOS(ContactService contactService) async {
     if (_isSending) return;
@@ -22,7 +29,6 @@ class SOSService {
     print("[SOS] sendSOS() called");
 
     try {
-      // Get all data in parallel for speed
       final results = await Future.wait([
         _getLocation(),
         _getDeviceName(),
@@ -41,10 +47,13 @@ class SOSService {
 
       final timestamp = DateTime.now();
 
+      // Generate unique session ID for this SOS event
+      _activeSessionId = 'SOS_${timestamp.millisecondsSinceEpoch}';
+
       print("[SOS] Location: $lat, $lng");
       print("[SOS] Device: $deviceName | IP: $deviceIP");
+      print("[SOS] Session: $_activeSessionId");
 
-      // Run SMS + server ping in parallel
       await Future.wait([
         _sendSMS(
           contacts: contactService,
@@ -61,13 +70,75 @@ class SOSService {
           deviceName: deviceName,
           deviceIP: deviceIP,
           timestamp: timestamp,
+          sessionId: _activeSessionId!,
         ),
       ]);
+
+      // Start sending live location updates every 1 minute
+      _startLiveTracking(deviceName, deviceIP);
     } catch (e) {
       print("[SOS] Error: $e");
     } finally {
       _isSending = false;
     }
+  }
+
+  // ── LIVE LOCATION TRACKING ────────────────────────────────────
+  // Sends updated GPS to server every 60 seconds after SOS triggers
+
+  void _startLiveTracking(String deviceName, String deviceIP) {
+    _locationTimer?.cancel();
+    print("[SOS] 📍 Live tracking started — updating every 1 minute");
+
+    _locationTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (timer) async {
+        if (_activeSessionId == null) {
+          timer.cancel();
+          return;
+        }
+
+        final position = await _getLocation();
+        final lat = position?.latitude;
+        final lng = position?.longitude;
+
+        if (lat == null || lng == null) {
+          print("[SOS] Live location: GPS unavailable this update");
+          return;
+        }
+
+        final mapsLink = 'https://maps.google.com/?q=$lat,$lng';
+        print("[SOS] 📍 Live update: $lat, $lng");
+
+        try {
+          await http
+              .post(
+                Uri.parse(_locationUrl),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'session_id': _activeSessionId,
+                  'latitude': lat,
+                  'longitude': lng,
+                  'maps_link': mapsLink,
+                  'device_name': deviceName,
+                  'device_ip': deviceIP,
+                  'timestamp': DateTime.now().toIso8601String(),
+                }),
+              )
+              .timeout(const Duration(seconds: 10));
+          print("[SOS] ✅ Live location sent to server");
+        } catch (e) {
+          print("[SOS] Live location error (non-fatal): $e");
+        }
+      },
+    );
+  }
+
+  void stopLiveTracking() {
+    _locationTimer?.cancel();
+    _locationTimer = null;
+    _activeSessionId = null;
+    print("[SOS] Live tracking stopped");
   }
 
   // ── LOCATION ─────────────────────────────────────────────────
@@ -108,20 +179,16 @@ class SOSService {
     return 'Unknown Device';
   }
 
-  // ── DEVICE IP ADDRESS ────────────────────────────────────────
-  // Gets the device's current WiFi/mobile IP address
+  // ── DEVICE IP ────────────────────────────────────────────────
 
   Future<String> _getDeviceIP() async {
     try {
-      // Get all network interfaces
       final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
       );
-
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
-          // Skip loopback (127.x.x.x)
           if (!addr.isLoopback) {
             print("[SOS] Device IP: ${addr.address} (${interface.name})");
             return addr.address;
@@ -144,25 +211,23 @@ class SOSService {
     required String deviceName,
     required DateTime timestamp,
   }) async {
-    if (contacts.contacts.isEmpty) {
-      print("[SOS] No contacts saved");
-      return;
-    }
+    if (contacts.contacts.isEmpty) return;
 
     final smsStatus = await Permission.sms.status;
     if (!smsStatus.isGranted) {
       final result = await Permission.sms.request();
-      if (!result.isGranted) {
-        print("[SOS] SMS permission denied");
-        return;
-      }
+      if (!result.isGranted) return;
     }
+
+    final trackingLink =
+        'https://kavach-server-zmj5.onrender.com/track/${_activeSessionId ?? ''}';
 
     final message = 'KAVACH SOS ALERT!\n'
         'Device: $deviceName\n'
         'Time: ${_fmt(timestamp)}\n'
-        'Location: $mapsLink\n'
+        'Current Location: $mapsLink\n'
         '${lat != null ? 'Coords: $lat, $lng\n' : ''}'
+        'Live Tracking: $trackingLink\n'
         'PLEASE HELP IMMEDIATELY';
 
     print("[SOS] Sending SMS to ${contacts.contacts.length} contacts...");
@@ -182,8 +247,6 @@ class SOSService {
   }
 
   // ── SERVER PING ───────────────────────────────────────────────
-  // Sends: timestamp, live location, maps link, device name, device IP
-  // Does NOT send contact details
 
   Future<void> _pingServer({
     double? lat,
@@ -192,15 +255,12 @@ class SOSService {
     required String deviceName,
     required String deviceIP,
     required DateTime timestamp,
+    required String sessionId,
   }) async {
-    if (_serverUrl.contains('YOUR_SERVER_URL')) {
-      print("[SOS] Server URL not configured — skipping ping");
-      return;
-    }
-
     try {
       final payload = {
         'event': 'SOS_TRIGGERED',
+        'session_id': sessionId,
         'timestamp': timestamp.toIso8601String(),
         'device_name': deviceName,
         'device_ip': deviceIP,
@@ -225,12 +285,14 @@ class SOSService {
     }
   }
 
-  // ── HELPERS ──────────────────────────────────────────────────
-
   String _fmt(DateTime dt) => '${dt.day.toString().padLeft(2, '0')}/'
       '${dt.month.toString().padLeft(2, '0')}/'
       '${dt.year} '
       '${dt.hour.toString().padLeft(2, '0')}:'
       '${dt.minute.toString().padLeft(2, '0')}:'
       '${dt.second.toString().padLeft(2, '0')}';
+
+  void dispose() {
+    stopLiveTracking();
+  }
 }

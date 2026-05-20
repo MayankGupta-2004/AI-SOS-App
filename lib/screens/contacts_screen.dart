@@ -10,35 +10,43 @@ class ContactsScreen extends StatefulWidget {
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
 
-class _ContactsScreenState extends State<ContactsScreen>
-    with SingleTickerProviderStateMixin {
+// FIX: removed unused SingleTickerProviderStateMixin — no AnimationController
+// exists in this class, so the mixin was dead weight.
+class _ContactsScreenState extends State<ContactsScreen> {
   static const Color _cream = Color(0xFFFFF8F0);
   static const Color _card = Color(0xFFFFFFFF);
   static const Color _saffron = Color(0xFFFF6B2B);
   static const Color _coral = Color(0xFFFF8A50);
   static const Color _crimson = Color(0xFFD32F2F);
-  static const Color _forest = Color(0xFF2E7D32);
   static const Color _ink = Color(0xFF1C1B20);
   static const Color _slate = Color(0xFF6B6880);
   static const Color _divider = Color(0xFFEDE8E0);
 
-  final List<List<Color>> _avGrads = [
-    [const Color(0xFFFF6B2B), const Color(0xFFBF360C)],
-    [const Color(0xFF1565C0), const Color(0xFF0D47A1)],
-    [const Color(0xFF2E7D32), const Color(0xFF1B5E20)],
-    [const Color(0xFF6A1B9A), const Color(0xFF4A148C)],
-    [const Color(0xFF00838F), const Color(0xFF006064)],
+  // Controllers as class fields so they survive rebuilds and are disposed
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _phoneCtrl = TextEditingController();
+
+  final List<List<Color>> _avGrads = const [
+    [Color(0xFFFF6B2B), Color(0xFFBF360C)],
+    [Color(0xFF1565C0), Color(0xFF0D47A1)],
+    [Color(0xFF2E7D32), Color(0xFF1B5E20)],
+    [Color(0xFF6A1B9A), Color(0xFF4A148C)],
+    [Color(0xFF00838F), Color(0xFF006064)],
   ];
 
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
+  }
+
   void _showSheet({int? editIndex}) {
-    final nc = TextEditingController(
-        text: editIndex != null
-            ? widget.contactService.contacts[editIndex].name
-            : '');
-    final pc = TextEditingController(
-        text: editIndex != null
-            ? widget.contactService.contacts[editIndex].phone
-            : '');
+    _nameCtrl.text =
+        editIndex != null ? widget.contactService.contacts[editIndex].name : '';
+    _phoneCtrl.text = editIndex != null
+        ? widget.contactService.contacts[editIndex].phone
+        : '';
 
     showModalBottomSheet(
       context: context,
@@ -67,7 +75,6 @@ class _ContactsScreenState extends State<ContactsScreen>
                   ),
                 ),
               ),
-              // Sheet header
               Row(
                 children: [
                   Container(
@@ -80,14 +87,17 @@ class _ContactsScreenState extends State<ContactsScreen>
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
-                          color: _saffron.withOpacity(0.3),
+                          color: _saffron.withValues(alpha: 0.3),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.person_add_rounded,
-                        color: Colors.white, size: 24),
+                    child: const Icon(
+                      Icons.person_add_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Column(
@@ -112,20 +122,24 @@ class _ContactsScreenState extends State<ContactsScreen>
                 ],
               ),
               const SizedBox(height: 24),
-              // Name field
               _Field(
-                  ctrl: nc,
-                  hint: 'Full Name  •  पूरा नाम',
-                  icon: Icons.person_outline_rounded),
+                ctrl: _nameCtrl,
+                hint: 'Full Name  •  पूरा नाम',
+                icon: Icons.person_outline_rounded,
+              ),
               const SizedBox(height: 12),
-              // Phone field
               _Field(
-                  ctrl: pc,
-                  hint: 'Phone Number  •  +91XXXXXXXXXX',
-                  icon: Icons.phone_outlined,
-                  type: TextInputType.phone),
-              const SizedBox(height: 24),
-              // Action buttons
+                ctrl: _phoneCtrl,
+                hint: 'Phone Number  •  +91XXXXXXXXXX',
+                icon: Icons.phone_outlined,
+                type: TextInputType.phone,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Enter 10-digit mobile number',
+                style: TextStyle(color: _slate, fontSize: 11),
+              ),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
@@ -135,12 +149,15 @@ class _ContactsScreenState extends State<ContactsScreen>
                         padding: const EdgeInsets.symmetric(vertical: 15),
                         side: const BorderSide(color: _divider, width: 1.5),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
                       ),
                       child: const Text(
                         'रद्द करें',
                         style: TextStyle(
-                            color: _slate, fontWeight: FontWeight.w600),
+                          color: _slate,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -149,27 +166,44 @@ class _ContactsScreenState extends State<ContactsScreen>
                     flex: 2,
                     child: ElevatedButton(
                       onPressed: () async {
-                        final n = nc.text.trim();
-                        final p = pc.text.trim();
-                        if (n.isEmpty || p.isEmpty) return;
+                        final n = _nameCtrl.text.trim();
+                        final p = _phoneCtrl.text.trim();
+
+                        if (n.isEmpty) {
+                          _showError(ctx, 'Please enter a name');
+                          return;
+                        }
+
+                        final digits = p.replaceAll(RegExp(r'\D'), '');
+                        if (digits.length < 7 || digits.length > 15) {
+                          _showError(ctx, 'Enter a valid phone number');
+                          return;
+                        }
+
                         HapticFeedback.lightImpact();
-                        final c = EmergencyContact(name: n, phone: p);
+                        final contact = EmergencyContact(name: n, phone: p);
+
                         if (editIndex != null) {
                           await widget.contactService
-                              .updateContact(editIndex, c);
+                              .updateContact(editIndex, contact);
                         } else {
-                          await widget.contactService.addContact(c);
+                          await widget.contactService.addContact(contact);
                         }
+
+                        if (!mounted) return;
                         setState(() {});
-                        Navigator.pop(ctx);
+                        // FIX: ctx.mounted guard eliminates
+                        // use_build_context_synchronously warning
+                        if (ctx.mounted) Navigator.pop(ctx);
                       },
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 15),
                         backgroundColor: _saffron,
                         elevation: 0,
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                        shadowColor: _saffron.withOpacity(0.4),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        shadowColor: _saffron.withValues(alpha: 0.4),
                       ),
                       child: Text(
                         editIndex != null ? 'Save' : 'जोड़ें',
@@ -190,13 +224,22 @@ class _ContactsScreenState extends State<ContactsScreen>
     );
   }
 
+  void _showError(BuildContext ctx, String msg) {
+    ScaffoldMessenger.of(ctx).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: _crimson,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final contacts = widget.contactService.contacts;
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark,
-    ));
 
     return Scaffold(
       backgroundColor: _cream,
@@ -204,7 +247,7 @@ class _ContactsScreenState extends State<ContactsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header ────────────────────────────────────────────
+            // ── Header ──────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 12, 20, 0),
               child: Row(
@@ -220,19 +263,22 @@ class _ContactsScreenState extends State<ContactsScreen>
                         border: Border.all(color: _divider, width: 1.5),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
+                            color: Colors.black.withValues(alpha: 0.05),
                             blurRadius: 8,
                           ),
                         ],
                       ),
-                      child: const Icon(Icons.arrow_back_ios_new_rounded,
-                          color: _ink, size: 14),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: _ink,
+                        size: 14,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 4),
-                  Column(
+                  const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
                         'आपातकालीन संपर्क',
                         style: TextStyle(
@@ -252,7 +298,7 @@ class _ContactsScreenState extends State<ContactsScreen>
             ),
             const SizedBox(height: 16),
 
-            // ── Summary banner ────────────────────────────────────
+            // ── Summary banner ───────────────────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Container(
@@ -260,15 +306,15 @@ class _ContactsScreenState extends State<ContactsScreen>
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      _saffron.withOpacity(0.1),
-                      _coral.withOpacity(0.05),
+                      _saffron.withValues(alpha: 0.1),
+                      _coral.withValues(alpha: 0.05),
                     ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: _saffron.withOpacity(0.2),
+                    color: _saffron.withValues(alpha: 0.2),
                     width: 1.5,
                   ),
                 ),
@@ -308,9 +354,10 @@ class _ContactsScreenState extends State<ContactsScreen>
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
                               value: contacts.length / 5,
-                              backgroundColor: _saffron.withOpacity(0.12),
-                              valueColor:
-                                  const AlwaysStoppedAnimation<Color>(_saffron),
+                              backgroundColor: _saffron.withValues(alpha: 0.12),
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                _saffron,
+                              ),
                               minHeight: 5,
                             ),
                           ),
@@ -331,8 +378,11 @@ class _ContactsScreenState extends State<ContactsScreen>
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: _divider, width: 1),
                       ),
-                      child: const Icon(Icons.sms_rounded,
-                          color: _saffron, size: 26),
+                      child: const Icon(
+                        Icons.sms_rounded,
+                        color: _saffron,
+                        size: 26,
+                      ),
                     ),
                   ],
                 ),
@@ -340,7 +390,7 @@ class _ContactsScreenState extends State<ContactsScreen>
             ),
             const SizedBox(height: 16),
 
-            // ── Contact list ──────────────────────────────────────
+            // ── Contact list ─────────────────────────────────────
             Expanded(
               child: contacts.isEmpty
                   ? Center(
@@ -351,13 +401,18 @@ class _ContactsScreenState extends State<ContactsScreen>
                             width: 88,
                             height: 88,
                             decoration: BoxDecoration(
-                              color: _saffron.withOpacity(0.08),
+                              color: _saffron.withValues(alpha: 0.08),
                               shape: BoxShape.circle,
                               border: Border.all(
-                                  color: _saffron.withOpacity(0.2), width: 1.5),
+                                color: _saffron.withValues(alpha: 0.2),
+                                width: 1.5,
+                              ),
                             ),
-                            child: Icon(Icons.people_outline_rounded,
-                                size: 40, color: _saffron.withOpacity(0.7)),
+                            child: Icon(
+                              Icons.people_outline_rounded,
+                              size: 40,
+                              color: _saffron.withValues(alpha: 0.7),
+                            ),
                           ),
                           const SizedBox(height: 20),
                           const Text(
@@ -378,14 +433,17 @@ class _ContactsScreenState extends State<ContactsScreen>
                             onTap: _showSheet,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 32, vertical: 15),
+                                horizontal: 32,
+                                vertical: 15,
+                              ),
                               decoration: BoxDecoration(
                                 gradient: const LinearGradient(
-                                    colors: [_saffron, _coral]),
+                                  colors: [_saffron, _coral],
+                                ),
                                 borderRadius: BorderRadius.circular(16),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: _saffron.withOpacity(0.35),
+                                    color: _saffron.withValues(alpha: 0.35),
                                     blurRadius: 20,
                                     offset: const Offset(0, 6),
                                   ),
@@ -411,7 +469,8 @@ class _ContactsScreenState extends State<ContactsScreen>
                         final c = contacts[i];
                         final grad = _avGrads[i % _avGrads.length];
                         return TweenAnimationBuilder<double>(
-                          tween: Tween(begin: 0.0, end: 1.0),
+                          // FIX: prefer_const_constructors — added const
+                          tween: Tween<double>(begin: 0.0, end: 1.0),
                           duration: Duration(milliseconds: 200 + i * 70),
                           curve: Curves.easeOutCubic,
                           builder: (_, v, child) => Opacity(
@@ -430,7 +489,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                               border: Border.all(color: _divider, width: 1.5),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.04),
+                                  color: Colors.black.withValues(alpha: 0.04),
                                   blurRadius: 10,
                                   offset: const Offset(0, 2),
                                 ),
@@ -451,7 +510,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                                     borderRadius: BorderRadius.circular(14),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: grad[0].withOpacity(0.3),
+                                        color: grad[0].withValues(alpha: 0.3),
                                         blurRadius: 8,
                                         offset: const Offset(0, 3),
                                       ),
@@ -487,18 +546,25 @@ class _ContactsScreenState extends State<ContactsScreen>
                                       const SizedBox(height: 3),
                                       Row(
                                         children: [
-                                          const Icon(Icons.phone_rounded,
-                                              size: 11, color: _slate),
+                                          const Icon(
+                                            Icons.phone_rounded,
+                                            size: 11,
+                                            color: _slate,
+                                          ),
                                           const SizedBox(width: 4),
-                                          Text(c.phone,
-                                              style: const TextStyle(
-                                                  color: _slate, fontSize: 12)),
+                                          Text(
+                                            c.phone,
+                                            style: const TextStyle(
+                                              color: _slate,
+                                              fontSize: 12,
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ],
                                   ),
                                 ),
-                                // Edit
+                                // Edit button
                                 _ActBtn(
                                   icon: Icons.edit_rounded,
                                   color: const Color(0xFF1565C0),
@@ -506,7 +572,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                                   onTap: () => _showSheet(editIndex: i),
                                 ),
                                 const SizedBox(width: 8),
-                                // Delete
+                                // Delete button
                                 _ActBtn(
                                   icon: Icons.delete_rounded,
                                   color: _crimson,
@@ -515,7 +581,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                                     HapticFeedback.lightImpact();
                                     await widget.contactService
                                         .removeContact(i);
-                                    setState(() {});
+                                    if (mounted) setState(() {});
                                   },
                                 ),
                               ],
@@ -548,13 +614,14 @@ class _ContactsScreenState extends State<ContactsScreen>
   }
 }
 
-// ── Shared reusables ──────────────────────────────────────────────
+// ── Reusable widgets ──────────────────────────────────────────────
 
 class _Field extends StatelessWidget {
   final TextEditingController ctrl;
   final String hint;
   final IconData icon;
   final TextInputType type;
+
   const _Field({
     required this.ctrl,
     required this.hint,
@@ -564,20 +631,29 @@ class _Field extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const saffron = Color(0xFFFF6B2B);
-    const divider = Color(0xFFEDE8E0);
-    const ink = Color(0xFF1C1B20);
-    const slate = Color(0xFF6B6880);
+    const Color saffron = Color(0xFFFF6B2B);
+    const Color divider = Color(0xFFEDE8E0);
+    const Color ink = Color(0xFF1C1B20);
 
     return TextField(
       controller: ctrl,
       keyboardType: type,
       style: const TextStyle(
-          color: ink, fontSize: 15, fontWeight: FontWeight.w600),
+        color: ink,
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+      ),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(color: Color(0xFFBBB0A8), fontSize: 13),
-        prefixIcon: Icon(icon, color: saffron.withOpacity(0.7), size: 20),
+        hintStyle: const TextStyle(
+          color: Color(0xFFBBB0A8),
+          fontSize: 13,
+        ),
+        prefixIcon: Icon(
+          icon,
+          color: saffron.withValues(alpha: 0.7),
+          size: 20,
+        ),
         filled: true,
         fillColor: const Color(0xFFFFF8F0),
         border: OutlineInputBorder(
@@ -592,8 +668,10 @@ class _Field extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: saffron, width: 2),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 15,
+        ),
       ),
     );
   }
@@ -604,11 +682,13 @@ class _ActBtn extends StatelessWidget {
   final Color color;
   final Color bg;
   final VoidCallback onTap;
-  const _ActBtn(
-      {required this.icon,
-      required this.color,
-      required this.bg,
-      required this.onTap});
+
+  const _ActBtn({
+    required this.icon,
+    required this.color,
+    required this.bg,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

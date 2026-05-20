@@ -1,7 +1,7 @@
 name: mobile_app
 description: Kavach — AI powered SOS emergency detection system
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -10,36 +10,47 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # AI / ML
+  # ── State Management ──────────────────────────────────
+  flutter_riverpod: ^2.5.1
+
+  # ── AI / ML ───────────────────────────────────────────
   tflite_flutter: ^0.12.1
 
-  # speech_to_text REMOVED — replaced by native Android SpeechService
-  # that runs as a foreground service and works when app is backgrounded
+  # ── Speech-to-Text ────────────────────────────────────
+  speech_to_text: ^7.0.0
 
-  # Location
+  # ── Audio Player (cross-platform siren) ──────────────
+  audioplayers: ^6.1.0
+
+  # ── Location ──────────────────────────────────────────
   geolocator: ^11.0.0
 
-  # SMS
-  flutter_background_messenger: ^0.0.2
+  # ── SMS via native MethodChannel (no plugin needed) ──
+  # ✅ REMOVED: flutter_background_messenger — unreliable on OEM devices
+  # SMS now sent via Android SmsManager directly in MainActivity.kt
 
-  # HTTP (server ping)
+  # ── URL launcher (iOS SMS fallback) ──────────────────
+  url_launcher: ^6.2.5
+
+  # ── HTTP ──────────────────────────────────────────────
   http: ^1.2.0
 
-  # Device info
+  # ── Device info ───────────────────────────────────────
   device_info_plus: ^10.1.0
 
-  # Local storage
+  # ── Local storage ─────────────────────────────────────
   shared_preferences: ^2.2.2
 
-  # File paths
+  # ── File paths ────────────────────────────────────────
   path_provider: ^2.1.2
 
-  # Permissions
+  # ── Permissions ───────────────────────────────────────
   permission_handler: ^11.3.1
 
-  # Push notifications
+  # ── Push notifications ────────────────────────────────
   flutter_local_notifications: ^17.2.3
 
+  # ── Icons ─────────────────────────────────────────────
   cupertino_icons: ^1.0.2
 
 dev_dependencies:

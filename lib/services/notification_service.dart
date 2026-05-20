@@ -1,11 +1,13 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// NotificationService — shows local push notifications.
+/// NotificationService — Cross-platform push notifications (Android + iOS)
 ///
 /// Used to notify the user when:
-///  - Protection mode starts
-///  - Protection mode stops
+///  - Protection mode starts/stops
 ///  - SOS is triggered
+///  - Countdown is active
 ///  - Recording starts/saves
 
 class NotificationService {
@@ -22,35 +24,55 @@ class NotificationService {
   static const int _protectionId = 1;
   static const int _sosId = 2;
   static const int _recordingId = 3;
+  static const int _countdownId = 4;
 
   /// Call once at app startup
   Future<void> init() async {
     if (_initialized) return;
 
-    const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher', // uses your existing app icon
-    );
+    try {
+      // Android settings
+      const androidSettings = AndroidInitializationSettings(
+        '@mipmap/ic_launcher',
+      );
 
-    const initSettings = InitializationSettings(
-      android: androidSettings,
-    );
+      // iOS settings
+      const iosSettings = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
 
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (details) {
-        // Handle tap on notification if needed
-        print("[Notification] Tapped: ${details.payload}");
-      },
-    );
+      const initSettings = InitializationSettings(
+        android: androidSettings,
+        iOS: iosSettings,
+      );
 
-    // Request notification permission (Android 13+)
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+      await _plugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (details) {
+          debugPrint('[Notification] Tapped: ${details.payload}');
+        },
+      );
 
-    _initialized = true;
-    print("[Notification] Initialized");
+      // Request notification permission (Android 13+ / iOS)
+      if (Platform.isAndroid) {
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.requestNotificationsPermission();
+      } else if (Platform.isIOS) {
+        await _plugin
+            .resolvePlatformSpecificImplementation<
+                IOSFlutterLocalNotificationsPlugin>()
+            ?.requestPermissions(alert: true, badge: true, sound: true);
+      }
+
+      _initialized = true;
+      debugPrint('[Notification] ✅ Initialized (${Platform.operatingSystem})');
+    } catch (e) {
+      debugPrint('[Notification] ❌ Init failed: $e');
+    }
   }
 
   // ── PROTECTION MODE ON ──────────────────────────────────────────
@@ -61,7 +83,7 @@ class NotificationService {
       title: '🛡️ Kavach Protection Active',
       body:
           'You are now in Protection Mode. Say "help" or "bachao" to trigger SOS.',
-      ongoing: true, // stays until protection is turned off
+      ongoing: true,
       payload: 'protection_on',
     );
   }
@@ -79,9 +101,28 @@ class NotificationService {
     );
   }
 
+  // ── SOS COUNTDOWN ──────────────────────────────────────────────
+
+  Future<void> showCountdown(int seconds) async {
+    await _show(
+      id: _countdownId,
+      title: '⚠️ SOS in $seconds seconds',
+      body: 'Tap to open app and cancel if false alarm.',
+      ongoing: true,
+      payload: 'countdown',
+      importance: Importance.max,
+      priority: Priority.max,
+    );
+  }
+
+  Future<void> cancelCountdown() async {
+    await _cancel(_countdownId);
+  }
+
   // ── SOS TRIGGERED ───────────────────────────────────────────────
 
   Future<void> showSOSTriggered() async {
+    await _cancel(_countdownId);
     await _show(
       id: _sosId,
       title: '🚨 SOS TRIGGERED',
@@ -136,31 +177,58 @@ class NotificationService {
     Importance importance = Importance.high,
     Priority priority = Priority.high,
   }) async {
-    if (!_initialized) await init();
+    if (!_initialized) {
+      try {
+        await init();
+      } catch (_) {
+        return;
+      }
+    }
 
-    final androidDetails = AndroidNotificationDetails(
-      'kavach_channel', // channel ID
-      'Kavach Alerts', // channel name
-      channelDescription: 'Kavach SOS protection alerts',
-      importance: importance,
-      priority: priority,
-      ongoing: ongoing, // ongoing = cannot be swiped away
-      autoCancel: !ongoing,
-      playSound: false, // no sound — app manages its own siren
-      icon: '@mipmap/ic_launcher',
-    );
+    try {
+      final androidDetails = AndroidNotificationDetails(
+        'kavach_channel',
+        'Kavach Alerts',
+        channelDescription: 'Kavach SOS protection alerts',
+        importance: importance,
+        priority: priority,
+        ongoing: ongoing,
+        autoCancel: !ongoing,
+        playSound: false,
+        icon: '@mipmap/ic_launcher',
+      );
 
-    final details = NotificationDetails(android: androidDetails);
+      const iosDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: false,
+      );
 
-    await _plugin.show(id, title, body, details, payload: payload);
-    print("[Notification] Shown: $title");
+      final details = NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      );
+
+      await _plugin.show(id, title, body, details, payload: payload);
+      debugPrint('[Notification] Shown: $title');
+    } catch (e) {
+      debugPrint('[Notification] ❌ Show error: $e');
+    }
   }
 
   Future<void> _cancel(int id) async {
-    await _plugin.cancel(id);
+    try {
+      await _plugin.cancel(id);
+    } catch (e) {
+      debugPrint('[Notification] ❌ Cancel error: $e');
+    }
   }
 
   Future<void> cancelAll() async {
-    await _plugin.cancelAll();
+    try {
+      await _plugin.cancelAll();
+    } catch (e) {
+      debugPrint('[Notification] ❌ CancelAll error: $e');
+    }
   }
 }

@@ -1,24 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- ── Audio / Microphone ──────────────────────────────────── -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+
+    <!-- ── Location ───────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+
+    <!-- ── SMS / Phone ────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.SEND_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+
+    <!-- ── Network ────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- ── Power / Wake ───────────────────────────────────────── -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- ── Storage (scoped per SDK) ───────────────────────────── -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+
+    <!-- ── Foreground Service (REQUIRED — all three for Android 14+) ── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+
+    <!-- ── Notifications (Android 13+) ───────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- ── Boot / Restart ─────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <queries>
         <intent>
@@ -33,9 +53,12 @@
         android:enableOnBackInvokedCallback="true"
         android:requestLegacyExternalStorage="true">
 
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false"/>
+        <!--
+            REMOVED: io.flutter.embedding.android.EnableImpeller = false
+            Reason: Impeller opt-out is deprecated in Flutter 3.41+ and will
+            be removed in a future release. Letting Impeller run is the correct
+            path. Remove this meta-data entirely.
+        -->
 
         <activity
             android:name=".MainActivity"
@@ -59,16 +82,40 @@
 
         <meta-data android:name="flutterEmbedding" android:value="2"/>
 
-        <!-- Single unified service: speech + recording in one foreground service -->
+        <!--
+            KavachService — the core protection service.
+
+            FIX 1: foregroundServiceType="microphone|location"
+                   Both types declared so Android 14+ (targetSDK=36) allows
+                   the service to start when RECORD_AUDIO + location are used.
+                   Samsung One UI, Pixel, and MIUI all enforce this strictly.
+
+            FIX 2: android:stopWithTask="false"
+                   Keeps the service alive on OEM task-killers (Oppo, Vivo,
+                   Infinix, Samsung) even when the user swipes the app away.
+                   Without this, many OEMs kill the service with the task.
+
+            FIX 3: android:directBootAware="true"
+                   Allows KavachBootReceiver to restart the service immediately
+                   after boot, before the user unlocks the device.
+        -->
         <service
             android:name=".KavachService"
-            android:foregroundServiceType="microphone"
-            android:exported="false"/>
+            android:foregroundServiceType="microphone|location"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:directBootAware="true"/>
 
-        <!-- Siren audio service -->
+        <!--
+            AudioService (audio_service package for siren playback).
+
+            FIX: foregroundServiceType changed from "microphone" to "mediaPlayback"
+                 This service plays audio, not records it. Using the wrong type
+                 causes crashes on Android 14+ strict validation.
+        -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
-            android:foregroundServiceType="microphone"
+            android:foregroundServiceType="mediaPlayback"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService"/>
@@ -80,6 +127,30 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Restarts KavachService on device boot or app update -->
+        <receiver
+            android:name=".KavachBootReceiver"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+
+        <!--
+            Internal broadcast to restart mic after app is swiped away.
+            exported="false" — only our own app can send this broadcast.
+        -->
+        <receiver
+            android:name=".KavachRestartReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.mobile_app.RESTART_SPEECH"/>
             </intent-filter>
         </receiver>
 

@@ -22,12 +22,12 @@ class KavachButton extends StatelessWidget {
           BoxShadow(
             color:
                 (isActive ? const Color(0xFFFF1744) : const Color(0xFFFF4500))
-                    .withOpacity(0.45),
+                    .withValues(alpha: 0.45),
             blurRadius: 35,
             spreadRadius: 8,
           ),
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
@@ -40,7 +40,7 @@ class KavachButton extends StatelessWidget {
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
             child: Icon(
@@ -62,7 +62,7 @@ class KavachButton extends StatelessWidget {
           Text(
             isActive ? 'रोकें' : 'कवच',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
+              color: Colors.white.withValues(alpha: 0.7),
               fontSize: 14,
               letterSpacing: 2,
             ),

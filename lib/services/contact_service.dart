@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// ContactService — stores and retrieves up to 5 emergency contacts.
@@ -27,10 +28,9 @@ class ContactService {
   Future<void> loadContacts() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_key) ?? [];
-    contacts = raw
-        .map((e) => EmergencyContact.fromJson(jsonDecode(e)))
-        .toList();
-    print("[ContactService] Loaded ${contacts.length} contacts");
+    contacts =
+        raw.map((e) => EmergencyContact.fromJson(jsonDecode(e))).toList();
+    debugPrint('[ContactService] Loaded ${contacts.length} contacts');
   }
 
   /// Save contacts to local storage
@@ -38,7 +38,7 @@ class ContactService {
     final prefs = await SharedPreferences.getInstance();
     final raw = contacts.map((c) => jsonEncode(c.toJson())).toList();
     await prefs.setStringList(_key, raw);
-    print("[ContactService] Saved ${contacts.length} contacts");
+    debugPrint('[ContactService] Saved ${contacts.length} contacts');
   }
 
   /// Add a new contact (max 5)

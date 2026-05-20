@@ -1,16 +1,12 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// RecordingService — Flutter side.
+/// RecordingService — Audio recording via native MethodChannel
 ///
-/// The 10-minute auto-stop timer lives in the NATIVE Android service
-/// (RecordingService.kt → handler.postDelayed).
-///
-/// This means recording stops correctly even when:
-///   - App is swiped from recents
-///   - Phone screen is locked
-///   - Flutter engine is killed
-///
-/// This Dart class just starts/stops via MethodChannel.
+/// ✅ FIXED: startRecording now works from Flutter side (manual SOS)
+/// ✅ Works for both keyword-triggered and manual SOS
+/// ✅ Native KavachService handles the actual MediaRecorder
 
 class RecordingService {
   static const _channel = MethodChannel('com.example.mobile_app/recorder');
@@ -18,67 +14,68 @@ class RecordingService {
   bool _isRecording = false;
   String? _currentFilePath;
 
-  /// Start recording — 10-min timer is managed natively in Android
+  /// Start recording — works from Flutter side now
   Future<void> startRecording({Function(String path)? onSaved}) async {
     if (_isRecording) {
-      print("[Recording] Already recording — skipping");
+      debugPrint("[Recording] Already recording");
       return;
     }
 
     try {
-      print("[Recording] Starting via native RecordingService...");
+      debugPrint("[Recording] Starting via native service...");
 
-      final path = await _channel.invokeMethod<String>('startRecording');
+      // ✅ FIXED: native side now handles this properly
+      // Returns path if recording started, null if failed
+      final path = await _channel.invokeMethod<String?>('startRecording');
 
       if (path == null) {
-        print("[Recording] No path returned — start failed");
+        debugPrint(
+            "[Recording] ⚠️ No path returned — recording may have failed");
         return;
       }
 
       _currentFilePath = path;
       _isRecording = true;
-
-      print("[Recording] STARTED: $path");
-      print("[Recording] Auto-stop in 10 min (managed by Android service)");
-
-      // Notify caller with path when done
-      // Note: since the timer is native, onSaved won't fire when app is killed.
-      // The file is still saved correctly on disk regardless.
+      debugPrint("[Recording] ✅ STARTED: $path");
       onSaved?.call(path);
     } on PlatformException catch (e) {
-      print("[Recording] Platform error: ${e.code} — ${e.message}");
+      debugPrint("[Recording] ❌ Platform error: ${e.code} — ${e.message}");
+    } on MissingPluginException {
+      debugPrint(
+          "[Recording] ⚠️ Native recording not available on ${Platform.operatingSystem}");
     } catch (e) {
-      print("[Recording] Error: $e");
+      debugPrint("[Recording] ❌ Error: $e");
     }
   }
 
-  /// Request stop — always honoured (no min-duration block on Flutter side)
   Future<void> requestStop({Function(String path)? onSaved}) async {
-    if (!_isRecording) return;
     await _stop(onSaved: onSaved);
   }
 
-  /// Force stop
   Future<void> forceStop({Function(String path)? onSaved}) async {
-    if (!_isRecording) return;
     await _stop(onSaved: onSaved);
   }
 
   Future<void> _stop({Function(String path)? onSaved}) async {
+    if (!_isRecording) return;
+
     try {
-      final savedPath = await _channel.invokeMethod<String>('stopRecording');
+      final savedPath = await _channel.invokeMethod<String?>('stopRecording');
       _isRecording = false;
       final path = savedPath ?? _currentFilePath;
       if (path != null) {
-        print("[Recording] SAVED: $path");
+        debugPrint("[Recording] ✅ SAVED: $path");
         onSaved?.call(path);
       }
     } on PlatformException catch (e) {
       _isRecording = false;
-      print("[Recording] Stop error: ${e.message}");
+      debugPrint("[Recording] ❌ Stop error: ${e.message}");
+    } on MissingPluginException {
+      _isRecording = false;
+      debugPrint("[Recording] ⚠️ Native stop not available");
     } catch (e) {
       _isRecording = false;
-      print("[Recording] Stop error: $e");
+      debugPrint("[Recording] ❌ Error: $e");
     }
   }
 
